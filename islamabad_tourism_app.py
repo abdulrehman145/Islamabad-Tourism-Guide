@@ -1,4 +1,3 @@
-!pip install folium streamlit streamlit-folium osmnx networkx geopy pyngrok
 import streamlit as st
 import pandas as pd
 import folium
