@@ -8,7 +8,6 @@ from geopy.distance import geodesic
 import pandas as pd
 import requests
 from datetime import datetime
-import math
 import logging
 
 # Configure logging for debugging
@@ -32,8 +31,6 @@ def load_graph():
     """Load and cache the drivable road network for Islamabad."""
     try:
         graph = ox.graph_from_place("Islamabad, Pakistan", network_type="drive")
-        # Optional: Project graph to UTM for better performance (uncomment if needed)
-        # graph = ox.project_graph(graph)
         return graph
     except Exception as e:
         st.error(f"Failed to load road network: {str(e)}")
@@ -337,7 +334,7 @@ def main():
     with tab1:
         st.markdown("<h2 class='sub-header'>Your Route</h2>", unsafe_allow_html=True)
         if dest_coords:
- %>           graph = load_graph()
+            graph = load_graph()
             if graph:
                 try:
                     route_coords, distance, travel_time = find_path(graph, start_coords, dest_coords, algorithm)
