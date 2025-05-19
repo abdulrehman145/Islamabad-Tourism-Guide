@@ -1,394 +1,192 @@
+# tourism_assistant.py
 import streamlit as st
-import pandas as pd
+import osmnx as ox
+import networkx as nx
 import folium
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from streamlit_folium import folium_static
-import base64
-from PIL import Image
-import io
+from shapely.geometry import Point
+import pandas as pd
 
-# Set page configuration
-st.set_page_config(
-    page_title="Islamabad Tourism Assistant",
-    page_icon="🏙️",
-    layout="wide"
-)
+# Configure OSMnx settings
+ox.settings.log_console = False
+ox.settings.use_cache = True
+ox.settings.timeout = 300
 
-# Define attraction data
-attractions_data = {
+# Initialize geocoder
+@st.cache_resource
+def get_geolocator():
+    return Nominatim(user_agent="islamabad_tourism_v1")
+
+# Predefined popular spots with enhanced data
+PREDEFINED_SPOTS = {
     "Faisal Mosque": {
-        "description": "One of the largest mosques in the world, designed by Turkish architect Vedat Dalokay. The mosque's architecture is inspired by a Bedouin tent and is situated at the foot of Margalla Hills.",
-        "location": [33.7295, 73.0372],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Faisal_Mosque.jpg/1200px-Faisal_Mosque.jpg",
-        "best_time": "Early morning or late afternoon",
-        "activities": ["Prayer", "Photography", "Architecture appreciation"],
-        "category": "Religious"
-    },
-    "Pakistan Monument": {
-        "description": "A national monument representing the four provinces of Pakistan. The monument is shaped like a blooming flower and provides a panoramic view of Islamabad.",
-        "location": [33.6926, 73.0685],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c4/Pakistan_Monument_at_Night.jpg/1200px-Pakistan_Monument_at_Night.jpg",
-        "best_time": "Evening (sunset view)",
-        "activities": ["Photography", "Museum visit", "Scenic views"],
-        "category": "Cultural"
+        "category": "Religious",
+        "address": "Shah Faisal Ave, Islamabad",
+        "coordinates": (33.7294, 73.0361)
     },
     "Daman-e-Koh": {
-        "description": "A viewing point and hilltop garden offering spectacular views of Islamabad. Located in the Margalla Hills, it's a popular spot for locals and tourists alike.",
-        "location": [33.7463, 73.0581],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/86/Daman-e-Koh_Top_View_at_Night.jpg/1200px-Daman-e-Koh_Top_View_at_Night.jpg",
-        "best_time": "Evening (sunset view)",
-        "activities": ["Scenic views", "Photography", "Picnics", "Monkey watching"],
-        "category": "Nature"
+        "category": "Viewpoint",
+        "address": "Margalla Hills, Islamabad",
+        "coordinates": (33.7428, 73.0558)
     },
-    "Lok Virsa Museum": {
-        "description": "The National Institute of Folk & Traditional Heritage, showcasing Pakistan's cultural heritage through artifacts, crafts, and music.",
-        "location": [33.6895, 73.0770],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Lok_Virsa_Museum.jpg/1200px-Lok_Virsa_Museum.jpg",
-        "best_time": "Weekday mornings",
-        "activities": ["Cultural exhibits", "Folk music", "Craft shopping"],
-        "category": "Cultural"
-    },
-    "Margalla Hills National Park": {
-        "description": "A large natural reserve with hiking trails, wildlife, and beautiful scenery. Perfect for nature lovers and adventure seekers.",
-        "location": [33.7480, 73.0375],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/56/Margalla_Hills.jpg/1200px-Margalla_Hills.jpg",
-        "best_time": "Early morning or late afternoon",
-        "activities": ["Hiking", "Bird watching", "Wildlife spotting", "Photography"],
-        "category": "Nature"
-    },
-    "Rawal Lake": {
-        "description": "An artificial reservoir that supplies water to Islamabad and Rawalpindi. The lake view park offers boating, fishing, and picnic spots.",
-        "location": [33.6969, 73.1292],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3b/Rawal_Lake_Islamabad.jpg/1200px-Rawal_Lake_Islamabad.jpg",
-        "best_time": "Morning or evening",
-        "activities": ["Boating", "Fishing", "Picnics", "Bird watching"],
-        "category": "Nature"
-    },
-    "Lake View Park": {
-        "description": "A family amusement park on the banks of Rawal Lake, offering recreational facilities, gardens, and a bird aviary.",
-        "location": [33.7014, 73.1230],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/79/Lake_View_Park_Islamabad.jpg/1200px-Lake_View_Park_Islamabad.jpg",
-        "best_time": "Evening",
-        "activities": ["Amusement rides", "Boating", "Picnics", "Bird watching"],
-        "category": "Recreation"
-    },
-    "Shakarparian": {
-        "description": "A hilly area with terraced gardens, a cultural complex, and the Pakistan Monument Museum.",
-        "location": [33.6890, 73.0695],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/10/Shakar_Parian_Islamabad.JPG/1200px-Shakar_Parian_Islamabad.JPG",
-        "best_time": "Evening",
-        "activities": ["Garden walks", "Museum visits", "Picnics", "Cultural events"],
-        "category": "Nature"
-    },
-    "Saidpur Village": {
-        "description": "A centuries-old village transformed into a cultural center with restaurants, craft shops, and historic buildings.",
-        "location": [33.7385, 73.0587],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ef/Saidpur_Village.jpg/1200px-Saidpur_Village.jpg",
-        "best_time": "Evening",
-        "activities": ["Dining", "Shopping", "Cultural exploration", "Photography"],
-        "category": "Cultural"
-    },
-    "Centaurus Mall": {
-        "description": "A luxury shopping mall with international brands, a food court, and entertainment facilities.",
-        "location": [33.7096, 73.0493],
-        "image": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2c/Centaurus_Mall_Islamabad.jpg/1200px-Centaurus_Mall_Islamabad.jpg",
-        "best_time": "Afternoon or evening",
-        "activities": ["Shopping", "Dining", "Movies", "Entertainment"],
-        "category": "Shopping"
+    "Pakistan Monument": {
+        "category": "Historical",
+        "address": "Shakarparian, Islamabad",
+        "coordinates": (33.6934, 73.0656)
     }
 }
 
-# Convert attractions data to DataFrame
-attractions_df = pd.DataFrame.from_dict(attractions_data, orient='index')
-attractions_df['name'] = attractions_df.index
+# Session state for reviews
+if 'reviews' not in st.session_state:
+    st.session_state.reviews = {}
 
-# Custom CSS
-def load_css():
-    st.markdown("""
-    <style>
-        .main-header {
-            font-size: 2.5rem;
-            color: #1E88E5;
-            text-align: center;
-            margin-bottom: 1rem;
-            text-shadow: 1px 1px 2px #B0BEC5;
-        }
-        .sub-header {
-            font-size: 1.5rem;
-            color: #26A69A;
-            margin-top: 1rem;
-            margin-bottom: 0.5rem;
-        }
-        .attraction-card {
-            border-radius: 10px;
-            border: 1px solid #E0E0E0;
-            padding: 1rem;
-            margin: 0.5rem 0;
-            background-color: #FFFFFF;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            transition: transform 0.3s;
-        }
-        .attraction-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        }
-        .info-box {
-            background-color: #E3F2FD;
-            border-left: 5px solid #1E88E5;
-            padding: 1rem;
-            margin: 1rem 0;
-            border-radius: 0 5px 5px 0;
-        }
-        .category-pill {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: bold;
-            margin-right: 0.5rem;
-            margin-bottom: 0.5rem;
-            color: white;
-        }
-        .category-Religious {
-            background-color: #673AB7;
-        }
-        .category-Cultural {
-            background-color: #FF9800;
-        }
-        .category-Nature {
-            background-color: #4CAF50;
-        }
-        .category-Recreation {
-            background-color: #03A9F4;
-        }
-        .category-Shopping {
-            background-color: #F44336;
-        }
-        .activity-tag {
-            display: inline-block;
-            padding: 0.15rem 0.5rem;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            margin-right: 0.3rem;
-            margin-bottom: 0.3rem;
-            background-color: #E0E0E0;
-            color: #333333;
-        }
-    </style>
-    """, unsafe_allow_html=True)
+def get_coordinates(address):
+    """Get coordinates with enhanced error handling and caching"""
+    try:
+        location = get_geolocator().geocode(f"{address}, Islamabad")
+        if location:
+            return (location.latitude, location.longitude)
+    except (GeocoderTimedOut, GeocoderUnavailable) as e:
+        st.error("Geocoding service unavailable. Using default location.")
+    return (33.6844, 73.0479)  # Centroid of Islamabad
 
-# App functions
-def create_map(attractions):
-    m = folium.Map(location=[33.7294, 73.0931], zoom_start=12, tiles="OpenStreetMap")
-    
-    for name, info in attractions.iterrows():
-        popup_html = f"""
-        <div style="width: 200px; text-align: center;">
-            <h3>{name}</h3>
-            <p><b>Category:</b> {info['category']}</p>
-            <p><b>Best time:</b> {info['best_time']}</p>
-            <a href="#{name.replace(' ', '_')}" target="_self">More details</a>
-        </div>
-        """
+@st.cache_data(ttl=3600)  # Cache routes for 1 hour
+def get_route_map(origin_coords, dest_coords, transport_mode='drive'):
+    """Generate optimized route map with error handling"""
+    try:
+        G = ox.graph_from_point(origin_coords, dist=5000, network_type=transport_mode)
         
-        # Customize icon based on category
-        icon_colors = {
-            "Religious": "purple",
-            "Cultural": "orange",
-            "Nature": "green",
-            "Recreation": "blue",
-            "Shopping": "red"
-        }
-        icon_color = icon_colors.get(info['category'], "blue")
+        origin_node = ox.distance.nearest_nodes(G, origin_coords[1], origin_coords[0])
+        dest_node = ox.distance.nearest_nodes(G, dest_coords[1], dest_coords[0])
         
-        folium.Marker(
-            location=info['location'],
-            popup=folium.Popup(popup_html, max_width=300),
-            tooltip=name,
-            icon=folium.Icon(color=icon_color, icon="info-sign")
-        ).add_to(m)
-    
-    return m
+        route = nx.shortest_path(G, origin_node, dest_node, weight='length')
+        route_map = ox.plot_route_folium(G, route, zoom=13, 
+                                       route_color='#4285F4', 
+                                       opacity=0.7,
+                                       tiles='CartoDB positron')
+        
+        # Custom markers
+        folium.Marker(origin_coords, 
+                    icon=folium.Icon(color='green', icon='map-pin', prefix='fa')).add_to(route_map)
+        folium.Marker(dest_coords, 
+                    icon=folium.Icon(color='red', icon='flag-checkered', prefix='fa')).add_to(route_map)
+        
+        return route_map, ox.stats.route_stats(G, route)
+    except Exception as e:
+        st.error(f"Routing error: {str(e)}")
+        return None, None
 
-def display_itinerary(selected_attractions, days):
-    if not selected_attractions or days < 1:
-        return
-    
-    attractions_per_day = max(1, len(selected_attractions) // days)
-    remaining = len(selected_attractions) % days
-    
-    st.markdown(f"<h2 class='sub-header'>Your {days}-Day Itinerary</h2>", unsafe_allow_html=True)
-    
-    daily_attractions = []
-    start_idx = 0
-    
-    for day in range(1, days + 1):
-        count = attractions_per_day + (1 if day <= remaining else 0)
-        end_idx = start_idx + count
-        daily_attractions.append(selected_attractions[start_idx:end_idx])
-        start_idx = end_idx
-    
-    for day in range(1, days + 1):
-        with st.expander(f"Day {day}", expanded=True):
-            st.write("---")
-            for attraction in daily_attractions[day-1]:
-                info = attractions_df.loc[attraction]
+def get_nearby_pois(location_coords):
+    """Get nearby Points of Interest with fallback to predefined"""
+    try:
+        tags = {'tourism': True, 'historic': True, 'leisure': True}
+        gdf = ox.features.features_from_point(location_coords, tags, dist=2000)
+        gdf = gdf[['name', 'tourism', 'addr:street', 'geometry']].dropna()
+        gdf['coordinates'] = gdf['geometry'].apply(lambda x: (x.centroid.y, x.centroid.x))
+        return gdf.head(5)
+    except Exception:
+        return pd.DataFrame.from_dict(PREDEFINED_SPOTS, orient='index')
+
+def review_section(place_name):
+    """Interactive review section with state management"""
+    with st.expander(f"✍️ Reviews for {place_name}", expanded=False):
+        with st.form(key=f'review_form_{place_name}'):
+            cols = st.columns([2, 1])
+            with cols[0]:
+                review_text = st.text_area("Share your experience", key=f'text_{place_name}')
+            with cols[1]:
+                rating = st.slider("Rating", 1, 5, 5, key=f'rating_{place_name}')
                 
-                # Morning/Afternoon/Evening recommendation based on best time
-                time_of_day = "Morning"
-                if "evening" in info['best_time'].lower():
-                    time_of_day = "Evening"
-                elif "afternoon" in info['best_time'].lower():
-                    time_of_day = "Afternoon"
-                
-                st.markdown(f"<h3>{time_of_day}: {attraction}</h3>", unsafe_allow_html=True)
-                col1, col2 = st.columns([1, 2])
-                
-                with col1:
-                    st.image(info['image'], caption=attraction, use_column_width=True)
-                
-                with col2:
-                    st.markdown(f"<span class='category-pill category-{info['category']}'>{info['category']}</span>", unsafe_allow_html=True)
-                    st.write(info['description'])
-                    st.write(f"**Best time to visit:** {info['best_time']}")
-                    
-                    st.write("**Activities:**")
-                    activities_html = ""
-                    for activity in info['activities']:
-                        activities_html += f"<span class='activity-tag'>{activity}</span>"
-                    st.markdown(activities_html, unsafe_allow_html=True)
-                
-                st.write("---")
+            if st.form_submit_button("Post Review"):
+                if place_name not in st.session_state.reviews:
+                    st.session_state.reviews[place_name] = []
+                st.session_state.reviews[place_name].append({
+                    'rating': rating,
+                    'text': review_text
+                })
+        
+        if place_name in st.session_state.reviews:
+            for idx, review in enumerate(st.session_state.reviews[place_name]):
+                st.markdown(f"""
+                <div style="padding: 10px; background: #f8f9fa; border-radius: 5px; margin: 5px 0;">
+                    <div style="color: #f39c12; font-size: 1.2em;">{"★" * review['rating']}</div>
+                    <div>{review['text']}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
 def main():
-    load_css()
-    
-    # Header
-    st.markdown("<h1 class='main-header'>🏙️ Islamabad Tourism Assistant</h1>", unsafe_allow_html=True)
-    
-    # Sidebar for filters and selections
-    st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/3/32/Faisal_Mosque_July_1_2005_pic32.JPG/800px-Faisal_Mosque_July_1_2005_pic32.JPG", caption="Islamabad - The Beautiful")
-    
-    st.sidebar.markdown("## Plan Your Visit")
-    
-    # Category filter
-    categories = sorted(attractions_df['category'].unique())
-    selected_categories = st.sidebar.multiselect(
-        "Filter by Category",
-        categories,
-        default=categories
+    """Main application function"""
+    st.set_page_config(
+        page_title="Islamabad Tourism Assistant",
+        page_icon="🏙️",
+        layout="wide",
+        initial_sidebar_state="expanded"
     )
     
-    # Activities filter
-    all_activities = []
-    for acts in attractions_df['activities']:
-        all_activities.extend(acts)
-    unique_activities = sorted(set(all_activities))
+    # Custom CSS
+    st.markdown("""
+    <style>
+    .main-title {color: #1a73e8; text-align: center; padding: 1rem;}
+    .sidebar .sidebar-content {background-color: #f8f9fa;}
+    .st-emotion-cache-1y4p8pa {padding: 2rem 1rem;}
+    [data-testid="stExpander"] {background: white; border-radius: 10px;}
+    </style>
+    """, unsafe_allow_html=True)
     
-    selected_activities = st.sidebar.multiselect(
-        "Filter by Activities",
-        unique_activities
-    )
+    st.markdown('<h1 class="main-title">🏙️ Islamabad Tourism Assistant</h1>', unsafe_allow_html=True)
     
-    # Filter attractions based on selections
-    filtered_attractions = attractions_df.copy()
+    # Sidebar Controls
+    with st.sidebar:
+        st.header("🗺️ Navigation Controls")
+        destination = st.text_input("📍 Enter Destination", "Pakistan Monument")
+        transport_mode = st.selectbox("🚗 Transportation Mode", ["drive", "walk", "bike"], index=0)
+        show_route = st.toggle("🗺️ Show Route Map", True)
+        show_pois = st.toggle("🏞️ Show Nearby Attractions", True)
     
-    if selected_categories:
-        filtered_attractions = filtered_attractions[filtered_attractions['category'].isin(selected_categories)]
+    # Get coordinates
+    dest_coords = get_coordinates(destination)
     
-    if selected_activities:
-        filtered_attractions = filtered_attractions[filtered_attractions['activities'].apply(
-            lambda x: any(activity in x for activity in selected_activities)
-        )]
+    # Main content columns
+    map_col, poi_col = st.columns([2, 1], gap="large")
     
-    # Itinerary planner
-    st.sidebar.markdown("## Itinerary Planner")
-    available_attractions = filtered_attractions['name'].tolist()
+    with map_col:
+        if show_route:
+            route_map, route_stats = get_route_map((33.6844, 73.0479), dest_coords, transport_mode)
+            if route_map:
+                folium_static(route_map, width=700, height=500)
+                if route_stats:
+                    st.caption(f"Route Distance: {route_stats['length']/1000:.1f} km | "
+                             f"Estimated Time: {route_stats['travel_time']/60:.0f} mins")
     
-    selected_attractions = st.sidebar.multiselect(
-        "Select Attractions for Itinerary",
-        available_attractions,
-        default=available_attractions[:3] if len(available_attractions) >= 3 else available_attractions
-    )
-    
-    days = st.sidebar.slider("Number of Days", 1, 7, 2)
-    
-    # Weather information
-    st.sidebar.markdown("## Current Weather")
-    st.sidebar.info(
-        "☀️ **Current:** 28°C, Sunny\n\n"
-        "🌡️ **Today:** 25-32°C\n\n"
-        "💨 **Wind:** 10 km/h\n\n"
-        "💧 **Humidity:** 45%"
-    )
-    
-    # Main content
-    tab1, tab2, tab3, tab4 = st.tabs(["Map", "Attractions", "Itinerary", "Travel Tips"])
-    
-    with tab1:
-        st.markdown("<h2 class='sub-header'>Explore Islamabad</h2>", unsafe_allow_html=True)
-        st.write("Interactive map of top attractions in Islamabad. Click on markers for details.")
-        
-        if not filtered_attractions.empty:
-            m = create_map(filtered_attractions)
-            folium_static(m, width=800, height=500)
-        else:
-            st.warning("No attractions match your filters. Please adjust your selections.")
-    
-    with tab2:
-        st.markdown("<h2 class='sub-header'>Top Attractions</h2>", unsafe_allow_html=True)
-        
-        if not filtered_attractions.empty:
-            for name, info in filtered_attractions.iterrows():
-                with st.container():
-                    st.markdown(f"<div class='attraction-card' id='{name.replace(' ', '_')}'></div>", unsafe_allow_html=True)
-                    col1, col2 = st.columns([1, 2])
-                    
-                    with col1:
-                        st.image(info['image'], caption=name, use_column_width=True)
-                    
-                    with col2:
-                        st.markdown(f"<h3>{name}</h3>", unsafe_allow_html=True)
-                        st.markdown(f"<span class='category-pill category-{info['category']}'>{info['category']}</span>", unsafe_allow_html=True)
-                        st.write(info['description'])
-                        st.write(f"**Location:** {info['location'][0]}, {info['location'][1]}")
-                        st.write(f"**Best time to visit:** {info['best_time']}")
-                        
-                        activities_html = ""
-                        for activity in info['activities']:
-                            activities_html += f"<span class='activity-tag'>{activity}</span>"
-                        st.markdown(f"**Activities:** {activities_html}", unsafe_allow_html=True)
-        else:
-            st.warning("No attractions match your filters. Please adjust your selections.")
-    
-    with tab3:
-        if selected_attractions:
-            display_itinerary(selected_attractions, days)
-        else:
-            st.info("Select attractions and number of days in the sidebar to generate an itinerary.")
-    
-    with tab4:
-        st.markdown("<h2 class='sub-header'>Travel Tips for Islamabad</h2>", unsafe_allow_html=True)
-        
-        tips = {
-            "Best Time to Visit": "October to May, when the weather is pleasant and suitable for outdoor activities.",
-            "Transportation": "Uber and Careem are readily available. Local buses and taxis are options too. Renting a car is recommended for flexibility.",
-            "Accommodation": "Blue Area and F-sectors have many hotels ranging from budget to luxury options.",
-            "Local Cuisine": "Try local dishes like Chapli Kabab, Biryani, and traditional tea (chai) at Monal Restaurant or Des Pardes.",
-            "Cultural Etiquette": "Dress modestly, especially when visiting religious sites. Remove shoes before entering mosques.",
-            "Safety": "Islamabad is generally considered safe. However, always keep an eye on your belongings and follow travel advisories.",
-            "Language": "Urdu is the national language, but English is widely spoken in tourist areas."
-        }
-        
-        for title, content in tips.items():
-            with st.expander(title, expanded=True):
-                st.write(content)
-        
-        st.markdown("<div class='info-box'>", unsafe_allow_html=True)
-        st.write("**Emergency Contacts:**")
-        st.write("- Police: 15")
-        st.write("- Ambulance: 1122")
-        st.write("- Tourist Information: +92-51-9272117")
-        st.markdown("</div>", unsafe_allow_html=True)
+    with poi_col:
+        if show_pois:
+            st.subheader("🏞️ Nearby Attractions")
+            pois = get_nearby_pois(dest_coords)
+            
+            if not pois.empty:
+                for _, row in pois.iterrows():
+                    with st.container():
+                        st.markdown(f"""
+                        <div style="padding: 1rem; margin: 0.5rem 0; 
+                                    background: white; border-radius: 10px;
+                                    box-shadow: 0 2px 8px rgba(0,0,0,0.1)">
+                            <h4>{row['name']}</h4>
+                            <div style="color: #666; font-size: 0.9em;">
+                                <div>📍 {row.get('addr:street', 'Address not available')}</div>
+                                <div>🏷️ {row['tourism'].title()}</div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        review_section(row['name'])
+            else:
+                st.info("No nearby attractions found. Showing popular spots:")
+                for name, info in PREDEFINED_SPOTS.items():
+                    with st.expander(name):
+                        st.write(f"📍 {info['address']}")
+                        st.write(f"🏷️ {info['category']}")
+                        review_section(name)
 
 if __name__ == "__main__":
     main()
