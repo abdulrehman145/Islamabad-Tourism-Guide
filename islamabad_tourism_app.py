@@ -9,6 +9,8 @@ import pandas as pd
 import requests
 from datetime import datetime
 import logging
+from collections import deque
+import math
 
 # Configure logging for debugging
 logging.basicConfig(level=logging.INFO)
@@ -78,9 +80,52 @@ attractions_data = {
 attractions_df = pd.DataFrame.from_dict(attractions_data, orient='index')
 attractions_df['name'] = attractions_df.index
 
+# Custom A* heuristic
+def a_star_heuristic(u, v, graph):
+    """Custom heuristic for A* based on scaled Euclidean distance."""
+    u_coords = (graph.nodes[u]["y"], graph.nodes[u]["x"])
+    v_coords = (graph.nodes[v]["y"], graph.nodes[v]["x"])
+    return geodesic(u_coords, v_coords).meters * 1.5  # Scale heuristic for exploration
+
+# Custom BFS implementation
+def bfs_path(graph, source, target):
+    """Find shortest path using BFS (unweighted)."""
+    queue = deque([(source, [source])])
+    visited = {source}
+    
+    while queue:
+        node, path = queue.popleft()
+        if node == target:
+            return path
+        
+        for neighbor in graph.neighbors(node):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                queue.append((neighbor, path + [neighbor]))
+    
+    raise ValueError("No path found with BFS")
+
+# Custom DFS implementation
+def dfs_path(graph, source, target):
+    """Find a path using DFS (may not be shortest)."""
+    stack = [(source, [source])]
+    visited = {source}
+    
+    while stack:
+        node, path = stack.pop()
+        if node == target:
+            return path
+        
+        for neighbor in graph.neighbors(node):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                stack.append((neighbor, path + [neighbor]))
+    
+    raise ValueError("No path found with DFS")
+
 # Pathfinding algorithms
 def find_path(graph, source, target, algorithm="A*"):
-    """Find the shortest path between source and target nodes using the selected algorithm."""
+    """Find the path between source and target nodes using the selected algorithm."""
     try:
         if graph is None:
             raise ValueError("Road network not loaded.")
@@ -92,17 +137,13 @@ def find_path(graph, source, target, algorithm="A*"):
         
         # Select algorithm
         if algorithm == "A*":
-            path = nx.astar_path(graph, source_node, target_node, weight="length")
+            path = nx.astar_path(graph, source_node, target_node, heuristic=lambda u, v: a_star_heuristic(u, v, graph), weight="length")
         elif algorithm == "Dijkstra":
             path = nx.dijkstra_path(graph, source_node, target_node, weight="length")
         elif algorithm == "BFS":
-            path = nx.shortest_path(graph, source_node, target_node, method="breadth-first")
+            path = bfs_path(graph, source_node, target_node)
         elif algorithm == "DFS":
-            path = list(nx.dfs_preorder_nodes(nx.subgraph_view(graph, filter_edge=lambda u, v: True), source_node))
-            if target_node in path:
-                path = path[:path.index(target_node) + 1]
-            else:
-                raise ValueError("No path found with DFS")
+            path = dfs_path(graph, source_node, target_node)
         
         # Extract route coordinates
         route_coords = [(graph.nodes[node]["y"], graph.nodes[node]["x"]) for node in path]
@@ -110,6 +151,7 @@ def find_path(graph, source, target, algorithm="A*"):
         length = nx.path_weight(graph, path, weight="length") / 1000
         # Estimate travel time (minutes, 40 km/h)
         travel_time = length / 40 * 60
+        logger.info(f"Path found with {algorithm}: Length={length:.2f} km, Time={travel_time:.2f} min")
         return route_coords, length, travel_time
     except ImportError as e:
         if "scikit-learn" in str(e):
@@ -117,7 +159,7 @@ def find_path(graph, source, target, algorithm="A*"):
             logger.error("scikit-learn not installed.")
         raise
     except Exception as e:
-        logger.error(f"Pathfinding error: {str(e)}")
+        logger.error(f"Pathfinding error with {algorithm}: {str(e)}")
         raise ValueError(f"Pathfinding failed: {str(e)}")
 
 # Create Folium map
