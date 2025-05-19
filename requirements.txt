@@ -1,7 +1,8 @@
-streamlit
-folium
-streamlit-folium
-osmnx
-networkx
-geopy
-pyngrok
+streamlit 
+osmnx 
+networkx 
+folium 
+geopy 
+pandas 
+requests 
+scikit-learn
