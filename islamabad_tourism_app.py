@@ -1,181 +1,364 @@
-# tourism_assistant.py
 import streamlit as st
 import osmnx as ox
 import networkx as nx
 import folium
-import pandas as pd
-import math
 from streamlit_folium import folium_static
 from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
-from queue import PriorityQueue, Queue, LifoQueue
-from typing import Dict, List, Tuple
+from geopy.distance import geodesic
+import pandas as pd
+import requests
+from datetime import datetime
+import math
 
-# Configure OSMnx settings
-ox.settings.log_console = False
-ox.settings.use_cache = True
-ox.settings.timeout = 300
+# Set page configuration for a professional look
+st.set_page_config(
+    page_title="Islamabad Tourism Assistant",
+    page_icon="🏙️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Initialize geocoder
+# Initialize geocoder for location input
+geolocator = Nominatim(user_agent="islamabad_tourism_assistant")
+
+# Cache the road network graph to improve performance
 @st.cache_resource
-def get_geolocator():
-    return Nominatim(user_agent="islamabad_tourism_v2")
+def load_graph():
+    """Load and cache the drivable road network for Islamabad."""
+    return ox.graph_from_place("Islamabad, Pakistan", network_type="drive")
 
-# Constants
-ISLAMABAD_CENTER = (33.6844, 73.0479)
-TRANSPORT_MODES = ['drive', 'walk', 'bike']
-ALGORITHMS = ['A*', 'Dijkstra', 'BFS', 'DFS']
-
-# Session state initialization
-if 'user_location' not in st.session_state:
-    st.session_state.user_location = None
-if 'graph' not in st.session_state:
-    st.session_state.graph = None
-
-def get_coordinates(address: str) -> Tuple[float, float]:
-    """Get coordinates with enhanced error handling and caching"""
-    try:
-        location = get_geolocator().geocode(f"{address}, Islamabad")
-        if location:
-            return (location.latitude, location.longitude)
-    except (GeocoderTimedOut, GeocoderUnavailable):
-        st.error("Geocoding service unavailable. Using default location.")
-    return ISLAMABAD_CENTER
-
-def haversine(node1: Tuple[float, float], node2: Tuple[float, float]) -> float:
-    """Calculate great-circle distance between two points"""
-    lat1, lon1 = node1
-    lat2, lon2 = node2
-    R = 6371  # Earth radius in km
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat/2) * math.sin(dlat/2) +
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
-         math.sin(dlon/2) * math.sin(dlon/2))
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-
-class PathFinder:
-    """Pathfinding algorithms implementation"""
-    
-    def __init__(self, G: nx.MultiDiGraph):
-        self.G = G
-        self.nodes = list(G.nodes)
-        self.edges = list(G.edges)
-        
-    def get_neighbors(self, node: int) -> List[int]:
-        return list(self.G.neighbors(node))
-    
-    def get_node_location(self, node: int) -> Tuple[float, float]:
-        return (self.G.nodes[node]['y'], self.G.nodes[node]['x'])
-    
-    def find_path(self, start: int, end: int, algorithm: str) -> List[int]:
-        if algorithm == 'A*':
-            return self.a_star(start, end)
-        elif algorithm == 'Dijkstra':
-            return self.dijkstra(start, end)
-        elif algorithm == 'BFS':
-            return self.bfs(start, end)
-        elif algorithm == 'DFS':
-            return self.dfs(start, end)
-        return []
-    
-    def a_star(self, start: int, end: int) -> List[int]:
-        open_set = PriorityQueue()
-        open_set.put((0, start))
-        came_from = {}
-        g_score = {node: float('inf') for node in self.nodes}
-        g_score[start] = 0
-        
-        while not open_set.empty():
-            current = open_set.get()[1]
-            
-            if current == end:
-                return self.reconstruct_path(came_from, current)
-                
-            for neighbor in self.get_neighbors(current):
-                tentative_g = g_score[current] + self.G[current][neighbor][0]['length']
-                
-                if tentative_g < g_score[neighbor]:
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g
-                    f_score = tentative_g + haversine(
-                        self.get_node_location(neighbor),
-                        self.get_node_location(end)
-                    )
-                    open_set.put((f_score, neighbor))
-        return []
-    
-    def dijkstra(self, start: int, end: int) -> List[int]:
-        distances = {node: float('inf') for node in self.nodes}
-        distances[start] = 0
-        prev_nodes = {}
-        pq = PriorityQueue()
-        pq.put((0, start))
-        
-        while not pq.empty():
-            dist, current = pq.get()
-            if current == end:
-                break
-            for neighbor in self.get_neighbors(current):
-                new_dist = dist + self.G[current][neighbor][0]['length']
-                if new_dist < distances[neighbor]:
-                    distances[neighbor] = new_dist
-                    prev_nodes[neighbor] = current
-                    pq.put((new_dist, neighbor))
-        return self.reconstruct_path(prev_nodes, end)
-    
-    def bfs(self, start: int, end: int) -> List[int]:
-        queue = Queue()
-        queue.put(start)
-        visited = {start: None}
-        
-        while not queue.empty():
-            current = queue.get()
-            if current == end:
-                break
-            for neighbor in self.get_neighbors(current):
-                if neighbor not in visited:
-                    visited[neighbor] = current
-                    queue.put(neighbor)
-        return self.reconstruct_path(visited, end)
-    
-    def dfs(self, start: int, end: int) -> List[int]:
-        stack = LifoQueue()
-        stack.put(start)
-        visited = {start: None}
-        
-        while not stack.empty():
-            current = stack.get()
-            if current == end:
-                break
-            for neighbor in self.get_neighbors(current):
-                if neighbor not in visited:
-                    visited[neighbor] = current
-                    stack.put(neighbor)
-        return self.reconstruct_path(visited, end)
-    
-    def reconstruct_path(self, came_from: Dict[int, int], current: int) -> List[int]:
-        path = []
-        while current is not None:
-            path.append(current)
-            current = came_from.get(current)
-        return path[::-1]
-
-def get_route_map(G: nx.MultiDiGraph, route: List[int], algorithm: str) -> folium.Map:
-    """Generate optimized route map with algorithm-specific styling"""
-    route_colors = {
-        'A*': '#FF0000',
-        'Dijkstra': '#00FF00',
-        'BFS': '#0000FF',
-        'DFS': '#FF00FF'
+# Attractions dictionary (expanded from provided code)
+attractions_data = {
+    "Faisal Mosque": {
+        "location": [33.7295, 73.0372],
+        "category": "Religious",
+        "address": "Shah Faisal Ave, Islamabad",
+        "description": "One of the largest mosques in the world, designed by Vedat Dalokay, inspired by a Bedouin tent.",
+        "tags": ["history", "architecture", "religious"]
+    },
+    "Pakistan Monument": {
+        "location": [33.6926, 73.0685],
+        "category": "Cultural",
+        "address": "Shakarparian, Islamabad",
+        "description": "A national monument shaped like a blooming flower, representing Pakistan's provinces.",
+        "tags": ["history", "cultural", "museum"]
+    },
+    "Daman-e-Koh": {
+        "location": [33.7463, 73.0581],
+        "category": "Nature",
+        "address": "Margalla Hills, Islamabad",
+        "description": "A hilltop garden offering panoramic views of Islamabad, popular for sunsets.",
+        "tags": ["nature", "scenic", "hiking"]
+    },
+    "Lok Virsa Museum": {
+        "location": [33.6895, 73.0770],
+        "category": "Cultural",
+        "address": "Garden Ave, Islamabad",
+        "description": "Showcases Pakistan's folk heritage with artifacts, crafts, and music.",
+        "tags": ["cultural", "museum", "history"]
+    },
+    "Rawal Lake": {
+        "location": [33.6969, 73.1292],
+        "category": "Nature",
+        "address": "Rawal Lake, Islamabad",
+        "description": "An artificial reservoir with boating, fishing, and picnic spots.",
+        "tags": ["nature", "recreation", "water"]
     }
-    route_map = ox.plot_route_folium(G, route, 
-                                   color=route_colors.get(algorithm, '#FF0000'),
-                                   opacity=0.7,
-                                   tiles='CartoDB positron')
-    return route_map
+}
+attractions_df = pd.DataFrame.from_dict(attractions_data, orient='index')
+attractions_df['name'] = attractions_df.index
 
+# Pathfinding algorithms
+def find_path(graph, source, target, algorithm="A*"):
+    """Find the shortest path between source and target nodes using the selected algorithm."""
+    try:
+        source_node = ox.distance.nearest_nodes(graph, source[1], source[0])
+        target_node = ox.distance.nearest_nodes(graph, target[1], target[0])
+        
+        if algorithm == "A*":
+            path = nx.astar_path(graph, source_node, target_node, weight="length")
+        elif algorithm == "Dijkstra":
+            path = nx.dijkstra_path(graph, source_node, target_node, weight="length")
+        elif algorithm == "BFS":
+            path = nx.shortest_path(graph, source_node, target_node, method="breadth-first")
+        elif algorithm == "DFS":
+            # DFS may not find the shortest path; use a custom implementation
+            path = list(nx.dfs_preorder_nodes(nx.subgraph_view(graph, filter_edge=lambda u, v: True), source_node))
+            if target_node in path:
+                path = path[:path.index(target_node) + 1]
+            else:
+                raise ValueError("No path found with DFS")
+        
+        # Extract route coordinates
+        route_coords = [(graph.nodes[node]["y"], graph.nodes[node]["x"]) for node in path]
+        # Calculate total distance (in km)
+        length = nx.path_weight(graph, path, weight="length") / 1000
+        # Estimate travel time (minutes, assuming 40 km/h)
+        travel_time = length / 40 * 60
+        return route_coords, length, travel_time
+    except Exception as e:
+        raise ValueError(f"Pathfinding failed: {str(e)}")
+
+# Create Folium map with route and markers
+def create_map(start_coords, end_coords, route_coords=None, nearby_attractions=None):
+    """Generate an interactive Folium map with route and attraction markers."""
+    m = folium.Map(location=[33.7294, 73.0931], zoom_start=12, tiles="OpenStreetMap")
+    
+    # Add start marker (green)
+    folium.Marker(
+        start_coords,
+        tooltip="Start",
+        icon=folium.Icon(color="green", icon="play", prefix="fa")
+    ).add_to(m)
+    
+    # Add destination marker (red)
+    folium.Marker(
+        end_coords,
+        tooltip="Destination",
+        icon=folium.Icon(color="red", icon="stop", prefix="fa")
+    ).add_to(m)
+    
+    # Add route polyline
+    if route_coords:
+        folium.PolyLine(route_coords, color="blue", weight=5, opacity=0.7).add_to(m)
+    
+    # Add nearby attractions
+    if nearby_attractions is not None:
+        for name, info in nearby_attractions.iterrows():
+            popup_html = f"""
+            <div style='width: 200px; text-align: center;'>
+                <h4>{name}</h4>
+                <p><b>Category:</b> {info['category']}</p>
+                <p><b>Address:</b> {info['address']}</p>
+            </div>
+            """
+            folium.Marker(
+                location=info['location'],
+                tooltip=name,
+                popup=folium.Popup(popup_html, max_width=300),
+                icon=folium.Icon(color="purple", icon="info-sign", prefix="fa")
+            ).add_to(m)
+    
+    return m
+
+# Find nearby attractions based on distance and preferences
+def get_nearby_attractions(dest_coords, radius_km=5, preferences=None):
+    """Return attractions within radius_km of dest_coords, filtered by preferences."""
+    nearby = attractions_df.copy()
+    nearby['distance'] = nearby['location'].apply(lambda x: geodesic(dest_coords, x).km)
+    nearby = nearby[nearby['distance'] <= radius_km]
+    
+    if preferences:
+        nearby = nearby[nearby['tags'].apply(lambda x: any(p in x for p in preferences))]
+    
+    return nearby.sort_values('distance')
+
+# Fetch weather data (optional enhancement)
+def get_weather(coords):
+    """Fetch current weather for the given coordinates using OpenWeatherMap API."""
+    try:
+        api_key = "YOUR_API_KEY"  # Replace with your OpenWeatherMap API key
+        url = f"http://api.openweathermap.org/data/2.5/weather?lat={coords[0]}&lon={coords[1]}&appid={api_key}&units=metric"
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "temp": data["main"]["temp"],
+                "description": data["weather"][0]["description"].capitalize(),
+                "humidity": data["main"]["humidity"]
+            }
+        return None
+    except:
+        return None
+
+# Custom CSS for styling
+def load_css():
+    """Apply custom CSS for a polished UI."""
+    st.markdown("""
+    <style>
+        .main-header {
+            font-size: 2.5rem;
+            color: #1E88E5;
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+        .sub-header {
+            font-size: 1.5rem;
+            color: #26A69A;
+            margin-top: 1rem;
+        }
+        .attraction-card {
+            border-radius: 10px;
+            border: 1px solid #E0E0E0;
+            padding: 1rem;
+            margin: 0.5rem 0;
+            background-color: #FFFFFF;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            transition: transform 0.3s;
+        }
+        .attraction-card:hover {
+            transform: translateY(-5px);
+        }
+        .category-pill {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            color: white;
+            margin-right: 0.5rem;
+        }
+        .category-Religious { background-color: #673AB7; }
+        .category-Cultural { background-color: #FF9800; }
+        .category-Nature { background-color: #4CAF50; }
+        .info-box {
+            background-color: #E3F2FD;
+            border-left: 5px solid #1E88E5;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 0 5px 5px 0;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Main application logic
 def main():
-    """Main application function"""
-    st.set_page_config(
-        page_title
+    """Main function to run the Streamlit app."""
+    load_css()
+    
+    # Header
+    st.markdown("<h1 class='main-header'>🏙️ Islamabad Tourism Assistant</h1>", unsafe_allow_html=True)
+    st.markdown("Plan your trip, find the best routes, and explore Islamabad's attractions!")
+    
+    # Sidebar controls
+    st.sidebar.markdown("## 🗺️ Route Planner")
+    start_location = st.sidebar.text_input("Starting Point", placeholder="e.g., Air University Islamabad")
+    destination = st.sidebar.text_input("Destination", placeholder="e.g., Faisal Mosque, Islamabad")
+    algorithm = st.sidebar.selectbox("Pathfinding Algorithm", ["A*", "Dijkstra", "BFS", "DFS"], index=0)
+    show_attractions = st.sidebar.checkbox("Show Nearby Attractions", value=True)
+    
+    # User preferences (optional enhancement)
+    st.sidebar.markdown("## 🎯 Preferences")
+    preferences = st.sidebar.multiselect(
+        "Your Interests",
+        ["history", "cultural", "nature", "recreation", "architecture"],
+        default=["history", "nature"]
+    )
+    
+    # Review submission
+    st.sidebar.markdown("## ⭐ Submit a Review")
+    selected_attraction = st.sidebar.selectbox("Select Attraction", attractions_df['name'].tolist())
+    rating = st.sidebar.slider("Rating (1-5)", 1, 5, 3)
+    review_text = st.sidebar.text_area("Your Review", placeholder="Share your experience...")
+    if st.sidebar.button("Submit Review"):
+        if review_text:
+            if 'reviews' not in st.session_state:
+                st.session_state.reviews = {}
+            if selected_attraction not in st.session_state.reviews:
+                st.session_state.reviews[selected_attraction] = []
+            st.session_state.reviews[selected_attraction].append({
+                "rating": rating,
+                "text": review_text,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
+            })
+            st.sidebar.success("Review submitted!")
+        else:
+            st.sidebar.warning("Please enter a review.")
+    
+    # Geocode locations
+    default_start = [33.7139, 73.0339]  # Air University Islamabad
+    start_coords = default_start
+    start_name = "Air University Islamabad"
+    dest_coords = None
+    dest_name = ""
+    
+    if start_location:
+        try:
+            start_loc = geolocator.geocode(start_location + ", Islamabad")
+            if start_loc:
+                start_coords = [start_loc.latitude, start_loc.longitude]
+                start_name = start_location
+            else:
+                st.warning("Starting point not found. Using default: Air University Islamabad")
+        except:
+            st.warning("Error geocoding starting point. Using default.")
+    
+    if destination:
+        try:
+            dest_loc = geolocator.geocode(destination + ", Islamabad")
+            if dest_loc:
+                dest_coords = [dest_loc.latitude, dest_loc.longitude]
+                dest_name = destination
+            else:
+                st.error("Destination not found. Try 'Faisal Mosque, Islamabad'.")
+        except:
+            st.error("Error geocoding destination. Please try again.")
+    
+    # Fetch weather (optional)
+    weather_info = None
+    if dest_coords:
+        weather_info = get_weather(dest_coords)
+        if weather_info:
+            st.sidebar.markdown("## ☀️ Weather")
+            st.sidebar.info(
+                f"**Current:** {weather_info['temp']}°C, {weather_info['description']}\n\n"
+                f"**Humidity:** {weather_info['humidity']}%"
+            )
+    
+    # Main content with tabs
+    tab1, tab2, tab3 = st.tabs(["🗺️ Route Map", "🏞️ Attractions", "⭐ Reviews"])
+    
+    with tab1:
+        st.markdown("<h2 class='sub-header'>Your Route</h2>", unsafe_allow_html=True)
+        if dest_coords:
+            graph = load_graph()
+            try:
+                route_coords, distance, travel_time = find_path(graph, start_coords, dest_coords, algorithm)
+                nearby_attractions = get_nearby_attractions(dest_coords, preferences=preferences) if show_attractions else None
+                m = create_map(start_coords, dest_coords, route_coords, nearby_attractions)
+                folium_static(m, width=800, height=500)
+                st.markdown(f"<div class='info-box'>", unsafe_allow_html=True)
+                st.write(f"**From:** {start_name}")
+                st.write(f"**To:** {dest_name}")
+                st.write(f"**Distance:** {distance:.2f} km")
+                st.write(f"**Estimated Travel Time:** {travel_time:.2f} minutes")
+                st.write(f"**Algorithm:** {algorithm}")
+                st.markdown("</div>", unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Could not find route: {str(e)}")
+        else:
+            m = create_map(start_coords, start_coords)
+            folium_static(m, width=800, height=500)
+            st.info("Enter a destination to see the route.")
+    
+    with tab2:
+        st.markdown("<h2 class='sub-header'>Nearby Attractions</h2>", unsafe_allow_html=True)
+        if dest_coords and show_attractions:
+            nearby = get_nearby_attractions(dest_coords, preferences=preferences)
+            if not nearby.empty:
+                for name, info in nearby.iterrows():
+                    st.markdown(f"<div class='attraction-card'>", unsafe_allow_html=True)
+                    st.markdown(f"<h3>{name}</h3>", unsafe_allow_html=True)
+                    st.markdown(f"<span class='category-pill category-{info['category']}'>{info['category']}</span>", unsafe_allow_html=True)
+                    st.write(f"**Address:** {info['address']}")
+                    st.write(f"**Distance:** {info['distance']:.2f} km")
+                    st.write(f"**Description:** {info['description']}")
+                    st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                st.info("No attractions found within 5 km matching your preferences.")
+        else:
+            st.info("Enter a destination and enable 'Show Nearby Attractions' to see suggestions.")
+    
+    with tab3:
+        st.markdown("<h2 class='sub-header'>User Reviews</h2>", unsafe_allow_html=True)
+        if 'reviews' in st.session_state and st.session_state.reviews:
+            for attraction, reviews in st.session_state.reviews.items():
+                with st.expander(attraction, expanded=True):
+                    avg_rating = sum(r['rating'] for r in reviews) / len(reviews)
+                    st.markdown(f"**Average Rating:** {avg_rating:.1f} ⭐")
+                    for review in reviews:
+                        st.markdown(f"**{review['rating']} ⭐**: {review['text']} - *{review['timestamp']}*")
+        else:
+            st.info("No reviews submitted yet. Share your experience using the sidebar!")
+
+if __name__ == "__main__":
+    main()
