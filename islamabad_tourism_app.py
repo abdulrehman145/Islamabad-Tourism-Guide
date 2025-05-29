@@ -217,23 +217,23 @@ def get_nearby_attractions(dest_coords, radius_km=5, preferences=None):
     return nearby.sort_values('distance')
 
 # Fetch weather data
-def get_weather(coords):
-    """Fetch current weather using OpenWeatherMap API."""
-    try:
-        api_key = "YOUR_API_KEY"  # Replace with your OpenWeatherMap API key
-        url = f"http://api.openweathermap.org/data/2.5/weather?lat={coords[0]}&lon={coords[1]}&appid={api_key}&units=metric"
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            return {
-                "temp": data["main"]["temp"],
-                "description": data["weather"][0]["description"].capitalize(),
-                "humidity": data["main"]["humidity"]
-            }
-        return None
-    except:
-        logger.warning("Failed to fetch weather data.")
-        return None
+# def get_weather(coords):
+#     """Fetch current weather using OpenWeatherMap API."""
+#     try:
+#         api_key = "YOUR_API_KEY"  # Replace with your OpenWeatherMap API key
+#         url = f"http://api.openweathermap.org/data/2.5/weather?lat={coords[0]}&lon={coords[1]}&appid={api_key}&units=metric"
+#         response = requests.get(url)
+#         if response.status_code == 200:
+#             data = response.json()
+#             return {
+#                 "temp": data["main"]["temp"],
+#                 "description": data["weather"][0]["description"].capitalize(),
+#                 "humidity": data["main"]["humidity"]
+#             }
+#         return None
+#     except:
+#         logger.warning("Failed to fetch weather data.")
+#         return None
 
 # Custom CSS
 def load_css():
